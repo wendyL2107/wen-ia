@@ -299,19 +299,19 @@ class MotorRAG:
 
   @staticmethod
   def inicializar_proveedor(proveedor, api_key):
-    """Inicializa LLM y Embeddings con validación activa de modelos autorizados."""
+    """Inicializa LLM y Embeddings con validación estricta de modelos de alta calidad."""
     if "Groq" in proveedor:
       from langchain_groq import ChatGroq
       import groq
 
       client_g = groq.Groq(api_key=api_key)
 
-      # 1. Filtrar únicamente modelos conversacionales evitando partners con términos obligatorios
       modelos_candidatos = []
       try:
         for m in client_g.models.list().data:
           mid = m.id
           mid_low = mid.lower()
+          # Excluir modelos de audio, visiones, guardas y modelos regionales que entran en bucle
           if any(
               bad in mid_low
               for bad in [
@@ -327,25 +327,25 @@ class MotorRAG:
                   "speech",
                   "vision",
                   "preview",
+                  "allam",  # Excluido para evitar bucles de repetición en español
               ]
           ):
             continue
-          if "/" in mid:  # Evita modelos de terceros con aprobación de términos pendiente
+          if "/" in mid:
             continue
           modelos_candidatos.append(mid)
       except Exception:
         pass
 
+      # Prioridades probadas con excelente capacidad de razonamiento en español
       prioridades = [
           "llama-3.3-70b-versatile",
           "llama-3.1-8b-instant",
+          "gemma2-9b-it",
           "llama3-70b-8192",
           "llama3-8b-8192",
-          "allam-2-7b",
-          "gemma2-9b-it",
           "mixtral-8x7b-32768",
           "qwen-2.5-32b",
-          "deepseek-r1-distill-llama-70b",
       ]
 
       orden_prueba = [p for p in prioridades if p in modelos_candidatos]
@@ -356,7 +356,6 @@ class MotorRAG:
         if p not in orden_prueba:
           orden_prueba.append(p)
 
-      # 2. Prueba pre-vuelo: valida cuál modelo responde sin errores de términos ni 404
       modelo_groq = None
       for cand in orden_prueba:
         try:
@@ -371,16 +370,17 @@ class MotorRAG:
           continue
 
       if not modelo_groq:
-        modelo_groq = (
-            "allam-2-7b"
-            if "allam-2-7b" in modelos_candidatos
-            else "llama-3.1-8b-instant"
-        )
+        modelo_groq = "gemma2-9b-it"
 
+      # Inclusión de frequency_penalty y presence_penalty para evitar bucles
       llm = ChatGroq(
           model_name=modelo_groq,
-          temperature=0.4,
+          temperature=0.3,
           groq_api_key=api_key,
+          model_kwargs={
+              "frequency_penalty": 0.6,
+              "presence_penalty": 0.4,
+          },
       )
       embeddings = LocalVectorEmbeddings()
 
@@ -412,7 +412,7 @@ class MotorRAG:
         try:
           test_llm = ChatGoogleGenerativeAI(
               model=cand,
-              temperature=0.3,
+              temperature=0.2,
               google_api_key=api_key,
           )
           test_llm.invoke("1")
@@ -424,7 +424,7 @@ class MotorRAG:
       if llm is None:
         llm = ChatGoogleGenerativeAI(
             model="gemini-1.5-flash",
-            temperature=0.3,
+            temperature=0.2,
             google_api_key=api_key,
         )
 
@@ -443,7 +443,15 @@ class MotorRAG:
     else:
       from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
-      llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.3, api_key=api_key)
+      llm = ChatOpenAI(
+          model="gpt-4o-mini",
+          temperature=0.2,
+          api_key=api_key,
+          model_kwargs={
+              "frequency_penalty": 0.5,
+              "presence_penalty": 0.4,
+          },
+      )
       embeddings = OpenAIEmbeddings(api_key=api_key)
 
     return llm, embeddings
@@ -457,14 +465,13 @@ class MotorRAG:
         embedding=embeddings,
         collection_name=nombre_coleccion,
     )
-    # Recupera todos los bloques modulares para dar una visión analítica 360° al LLM
     return vectorstore.as_retriever(
         search_kwargs={"k": len(textos_analiticos)}
     )
 
   @staticmethod
   def consultar_asistente_rag(retriever, llm, pregunta_usuario):
-    """Ejecuta una cadena de recuperación fundamentada sin alucinaciones."""
+    """Ejecuta una cadena de recuperación fundamentada con directivas anti-bucle."""
     docs_rel = retriever.invoke(pregunta_usuario)
     contexto = "\n\n".join(
         [f"[Fragmento {i+1}]: {d.page_content}" for i, d in enumerate(docs_rel)]
@@ -472,8 +479,11 @@ class MotorRAG:
     prompt = ChatPromptTemplate.from_template("""
         Eres el asistente científico senior de Wen IA. 
         Tienes acceso a los resultados analíticos cuantitativos completos del experimento.
-        Responde a la pregunta del investigador basándote con rigurosidad técnica en el contexto provisto.
-        Si te preguntan a qué contexto tienes acceso o qué resultados conoces, resume todos los módulos disponibles en el contexto.
+        
+        REGLAS DE RESPUESTA:
+        - Responde a la pregunta del investigador basándote con rigurosidad técnica en el contexto provisto.
+        - PROHIBICIÓN ESTRICTA: No repitas la misma oración, dato, conclusión ni párrafo. Cada idea debe expresarse UNA SOLA VEZ.
+        - Sé conciso, claro y directo. Una vez que hayas respondido la pregunta, finaliza la respuesta inmediatamente sin agregar texto redundante.
         
         CONTEXTO ANALÍTICO RECUPERADO:
         {context}
@@ -520,7 +530,8 @@ class MotorRAG:
     ])
     prompt = ChatPromptTemplate.from_template("""
         Eres un asistente de documentación técnica e investigación.
-        Responde la pregunta basándote ÚNICAMENTE en los fragmentos recuperados, citando la página:
+        Responde la pregunta basándote ÚNICAMENTE en los fragmentos recuperados, citando la página.
+        No repitas información y concluye una vez contestada la pregunta:
         {context}
         
         PREGUNTA: {question}
@@ -1055,9 +1066,9 @@ if archivo_cargado is not None:
               f" Indexación: **{tipo_emb}** en ChromaDB."
           )
 
-          # Ingesta completa y estructurada de resultados experimentales
+          # Extracción estructurada y exhaustiva de todos los resultados analíticos
           anomalias_detectadas = [
-              f"Muestra {etiquetas[i]} (Dist. Mahalanobis: {d_mahal[i]:.2f})"
+              f"Muestra {etiquetas[i]} (Mahalanobis: {d_mahal[i]:.2f})"
               for i, p in enumerate(preds_iso)
               if p == -1
           ]
@@ -1086,7 +1097,7 @@ if archivo_cargado is not None:
               for j in range(len(cols_num))
           ])
 
-          # Dossier científico exhaustivo entregado a la base vectorial
+          # Dossier científico exhaustivo por bloques modulares
           textos_analiticos = [
               (
                   "### [MÓDULO 0]: CONFIGURACIÓN Y METADATOS EXPERIMENTALES\n"
