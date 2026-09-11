@@ -7,6 +7,7 @@ Suite Científica Multivariable, Asistente RAG Multi-Proveedor y Motor OLAP Colu
 import io
 import os
 import time
+import uuid
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.figure import Figure
@@ -346,7 +347,6 @@ class MotorRAG:
       genai.configure(api_key=api_key)
       modelo_gemini = "gemini-1.5-flash"
 
-      # Detección dinámica de modelos generativos permitidos por la API Key
       try:
         disponibles = [
             m.name.replace("models/", "")
@@ -399,12 +399,17 @@ class MotorRAG:
 
   @staticmethod
   def indexar_contexto_analitico(textos_analiticos, embeddings):
-    """Crea una base de datos vectorial Chroma en memoria sin colisiones."""
+    """Crea una colección vectorial Chroma efímera y sin duplicados acumulados."""
+    nombre_coleccion = f"wen_rag_{uuid.uuid4().hex[:8]}"
     vectorstore = Chroma.from_texts(
         texts=textos_analiticos,
         embedding=embeddings,
+        collection_name=nombre_coleccion,
     )
-    return vectorstore.as_retriever(search_kwargs={"k": 3})
+    # Recupera todos los bloques analíticos para que el LLM disponga del 100% de la información
+    return vectorstore.as_retriever(
+        search_kwargs={"k": len(textos_analiticos)}
+    )
 
   @staticmethod
   def consultar_asistente_rag(retriever, llm, pregunta_usuario):
@@ -415,10 +420,11 @@ class MotorRAG:
     )
     prompt = ChatPromptTemplate.from_template("""
         Eres el asistente científico senior de Wen IA. 
-        Responde basándote ESTRICTAMENTE en el siguiente contexto analítico y experimental.
-        Si la información no está sustentada en el contexto, indícalo con honestidad. No inventes datos.
+        Tienes acceso a los resultados analíticos cuantitativos completos del experimento.
+        Responde a la pregunta del investigador basándote con rigurosidad técnica en el contexto analítico provisto.
+        Si te preguntan qué acceso tienes o sobre qué variables conoces, detalla todos los módulos y resultados disponibles en el contexto.
         
-        CONTEXTO RECUPERADO:
+        CONTEXTO ANALÍTICO RECUPERADO:
         {context}
         
         PREGUNTA DEL INVESTIGADOR:
@@ -446,9 +452,11 @@ class MotorRAG:
         chunk_size=700, chunk_overlap=100
     )
     chunks = text_splitter.split_documents(docs)
+    nombre_pdf_col = f"wen_pdf_{uuid.uuid4().hex[:8]}"
     vectorstore = Chroma.from_documents(
         documents=chunks,
         embedding=embeddings,
+        collection_name=nombre_pdf_col,
     )
     return vectorstore.as_retriever(search_kwargs={"k": 4})
 
@@ -996,33 +1004,106 @@ if archivo_cargado is not None:
               f" Indexación: **{tipo_emb}** en ChromaDB."
           )
 
-          top_importancia = importancias.index[0]
-          porcentaje_top = importancias.values[0] * 100
+          # Extracción exhaustiva de todos los resultados multivariables
           anomalias_detectadas = [
-              etiquetas[i] for i, p in enumerate(preds_iso) if p == -1
+              f"Muestra {etiquetas[i]} (Dist. Mahalanobis: {d_mahal[i]:.2f})"
+              for i, p in enumerate(preds_iso)
+              if p == -1
           ]
+          rank_topsis_top = (
+              pd.DataFrame({"Muestra": etiquetas, "Puntaje": pts_topsis})
+              .sort_values(by="Puntaje", ascending=False)
+              .to_dict(orient="records")
+          )
 
+          tabla_corr_txt = "\n".join([
+              f"  * {v}: r = {corr_target[v]:.4f} ({('Fuerte' if abs(corr_target[v])>=0.7 else ('Moderada' if abs(corr_target[v])>=0.4 else 'Débil'))})"
+              for v in corr_ord.index
+          ])
+          tabla_imp_txt = "\n".join([
+              f"  * {v}: {val*100:.2f}% de importancia predictiva"
+              for v, val in importancias.items()
+          ])
+          topsis_txt = "\n".join([
+              f"  * Posición {idx+1}: Muestra {r['Muestra']} (Puntaje TOPSIS:"
+              f" {r['Puntaje']:.4f})"
+              for idx, r in enumerate(rank_topsis_top)
+          ])
+          pca_cargas_txt = "\n".join([
+              f"  * {cols_num[j]}: PC1 = {loadings[0, j]:.4f}, PC2 ="
+              f" {loadings[1, j]:.4f}"
+              for j in range(len(cols_num))
+          ])
+
+          # Dossier científico exhaustivo por bloques modulares
           textos_analiticos = [
               (
-                  f"Variable objetivo: '{target}'. Muestra: {N} observaciones,"
-                  f" {M} variables."
+                  "### [MÓDULO 0]: CONFIGURACIÓN Y METADATOS EXPERIMENTALES\n"
+                  f"- Variable objetivo analizada (Target): '{target}'\n"
+                  f"- Dimensiones del experimento: {N} observaciones y {M}"
+                  " variables cuantitativas.\n"
+                  f"- Estadísticas de '{target}': Valor mínimo ="
+                  f" {df_num[target].min():.4f}, máximo ="
+                  f" {df_num[target].max():.4f}, media ="
+                  f" {df_num[target].mean():.4f}, desviación estándar ="
+                  f" {df_num[target].std():.4f}."
               ),
               (
-                  f"Variable más influyente: '{top_importancia}'"
-                  f" ({porcentaje_top:.2f}% de peso en Random Forest)."
+                  "### [MÓDULO 1]: CORRELACIONES LINEALES DE PEARSON CON EL"
+                  f" TARGET '{target}'\n"
+                  f"Relación lineal detallada de todas las variables frente a"
+                  f" '{target}':\n"
+                  f"{tabla_corr_txt}\n"
+                  f"- Variable cuantitativa más influyente en correlación:"
+                  f" '{corr_ord.index[0]}' (r ="
+                  f" {corr_target[corr_ord.index[0]]:.4f}), con tendencia a"
+                  f" {efecto} el valor de '{target}'."
               ),
               (
-                  f"Variable con mayor correlación: '{top_var}' (r ="
-                  f" {corr_target[top_var]:.3f}, efecto {efecto})."
+                  "### [MÓDULO 2]: IMPORTANCIA DE VARIABLES EN MACHINE LEARNING"
+                  f" ({metodo})\n"
+                  "Influencia predictiva ponderada sobre el modelo:\n"
+                  f"{tabla_imp_txt}\n"
+                  f"- Variable de mayor peso relativo: '{importancias.index[0]}'"
+                  f" representando el {importancias.values[0]*100:.2f}% de la"
+                  " varianza/peso del modelo."
               ),
               (
-                  "Varianza acumulada en 2 componentes de PCA:"
-                  f" {np.sum(var_exp):.2f}%."
+                  "### [MÓDULO 3]: ANÁLISIS DE COMPONENTES PRINCIPALES (PCA"
+                  " 2D)\n"
+                  f"- Varianza explicada Componente 1 (PC1): {var_exp[0]:.2f}%\n"
+                  f"- Varianza explicada Componente 2 (PC2): {var_exp[1]:.2f}%\n"
+                  "- Varianza acumulada total en el plano 2D:"
+                  f" {np.sum(var_exp):.2f}%\n"
+                  f"Cargas vectoriales (loadings) de las variables:\n"
+                  f"{pca_cargas_txt}"
               ),
-              f"Coeficiente cofenético Ward: {cophenet_val:.3f}.",
               (
-                  "Anomalías detectadas (Isolation Forest):"
-                  f" {', '.join(anomalias_detectadas) if anomalias_detectadas else 'Ninguna'}."
+                  "### [MÓDULO 4]: CLUSTERING JERÁRQUICO Y SIMILITUD"
+                  " ESTRUCTURAL (WARD)\n"
+                  "- Método de enlace: Ward (distancia euclidiana"
+                  " estandarizada).\n"
+                  "- Coeficiente de correlación cofenética:"
+                  f" {cophenet_val:.4f} (mide la fidelidad del dendrograma"
+                  " respecto a las distancias observadas).\n"
+                  f"- Partición analítica delimitada: {min(3, N)} clusters"
+                  " principales de muestras."
+              ),
+              (
+                  "### [MÓDULO 5]: OPTIMIZACIÓN MULTICRITERIO TOPSIS\n"
+                  "Ranking global de desempeño y cercanía relativa a la"
+                  " solución ideal positiva (A+):\n"
+                  f"{topsis_txt}"
+              ),
+              (
+                  "### [MÓDULO 6]: CONTROL DE CALIDAD Y ANOMALÍAS (ISOLATION"
+                  " FOREST & MAHALANOBIS)\n"
+                  "- Algoritmos: Isolation Forest (tasa contaminación 15%) y"
+                  " Distancia multivariable de Mahalanobis.\n"
+                  "- Umbral crítico de corte (Percentil 85):"
+                  f" {np.percentile(d_mahal, 85):.4f}\n"
+                  "- Muestras atípicas identificadas:\n"
+                  f"{chr(10).join(['  * ' + a for a in anomalias_detectadas]) if anomalias_detectadas else '  * Ninguna muestra superó el criterio de anomalía crítica.'}"
               ),
           ]
 
@@ -1032,8 +1113,8 @@ if archivo_cargado is not None:
           pregunta_analitica = st.text_input(
               "Pregúntale a WEN-Assistant sobre este diagnóstico:",
               placeholder=(
-                  "Ej: ¿Cuáles variables dominan el modelo y qué anomalías se"
-                  " detectaron?"
+                  "Ej: ¿A qué contexto tienes acceso y qué variables dominan el"
+                  " modelo?"
               ),
           )
 
@@ -1100,8 +1181,8 @@ if archivo_cargado is not None:
                 - Proveedor: {proveedor_sel}
                 - Variable objetivo: {target}
                 - Observaciones: {N} filas, {M} variables.
-                - Predictor principal: {top_importancia} ({porcentaje_top:.2f}%).
-                - Correlación líder: {top_var} (r = {corr_target[top_var]:.3f}).
+                - Predictor principal: {corr_ord.index[0]} ({importancias.values[0]*100:.2f}% de influencia).
+                - Correlación líder: {corr_ord.index[0]} (r = {corr_target[corr_ord.index[0]]:.3f}).
                 - Varianza PCA (2D): {np.sum(var_exp):.2f}%.
                 - Cofenético Ward: {cophenet_val:.3f}.
                 - Anomalías: {', '.join(anomalias_detectadas) if anomalias_detectadas else 'Ninguna'}.
