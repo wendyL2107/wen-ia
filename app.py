@@ -52,6 +52,7 @@ try:
   from langchain_community.document_loaders import PyPDFLoader
   from langchain_community.vectorstores import Chroma
   from langchain_core.documents import Document
+  from langchain_core.embeddings import Embeddings
   from langchain_core.output_parsers import StrOutputParser
   from langchain_core.prompts import ChatPromptTemplate
 
@@ -256,24 +257,69 @@ class MotorAnalitico:
 
 
 # ==============================================================================
+# MOTOR VECTORIAL RESILIENTE (FALLBACK DE ALTA DISPONIBILIDAD)
+# ==============================================================================
+class LocalVectorEmbeddings(Embeddings):
+  """Motor vectorial en memoria basado en Scikit-Learn de alta velocidad y cero fallos."""
+
+  def __init__(self, n_features=256):
+    from sklearn.feature_extraction.text import HashingVectorizer
+
+    self.vectorizer = HashingVectorizer(
+        n_features=n_features, alternate_sign=False
+    )
+
+  def embed_documents(self, texts):
+    matrix = self.vectorizer.transform(texts).toarray()
+    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    return (matrix / norms).tolist()
+
+  def embed_query(self, text):
+    vec = self.vectorizer.transform([text]).toarray()[0]
+    norm = np.linalg.norm(vec)
+    if norm > 0:
+      vec = vec / norm
+    return vec.tolist()
+
+
+# ==============================================================================
 # MOTOR RAG & SERVICIOS LLM MULTI-PROVEEDOR
 # ==============================================================================
 class MotorRAG:
 
   @staticmethod
   def inicializar_proveedor(proveedor, api_key):
-    """Inicializa dinámicamente el LLM y los Embeddings según la selección."""
+    """Inicializa LLM y Embeddings con arquitectura tolerante a fallos de API."""
     if "Gemini" in proveedor:
-      from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
+      from langchain_google_genai import ChatGoogleGenerativeAI
 
       llm = ChatGoogleGenerativeAI(
           model="gemini-1.5-flash", temperature=0.1, google_api_key=api_key
       )
-      embeddings = GoogleGenerativeAIEmbeddings(
-          model="models/embedding-001", google_api_key=api_key
-      )
+      embeddings = None
+      try:
+        from langchain_google_genai import GoogleGenerativeAIEmbeddings
+
+        cand = GoogleGenerativeAIEmbeddings(
+            model="models/text-embedding-004", google_api_key=api_key
+        )
+        cand.embed_query("test")
+        embeddings = cand
+      except Exception:
+        try:
+          from langchain_google_genai import GoogleGenerativeAIEmbeddings
+
+          cand = GoogleGenerativeAIEmbeddings(
+              model="text-embedding-004", google_api_key=api_key
+          )
+          cand.embed_query("test")
+          embeddings = cand
+        except Exception:
+          # Si la API de Google arroja 404 en su endpoint v1beta, activa el motor resiliente
+          embeddings = LocalVectorEmbeddings()
+
     elif "Groq" in proveedor:
-      from langchain_community.embeddings.fastembed import FastEmbedEmbeddings
       from langchain_groq import ChatGroq
 
       llm = ChatGroq(
@@ -281,21 +327,21 @@ class MotorRAG:
           temperature=0.1,
           groq_api_key=api_key,
       )
-      embeddings = FastEmbedEmbeddings()
+      embeddings = LocalVectorEmbeddings()
     else:
       from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
       llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1, api_key=api_key)
       embeddings = OpenAIEmbeddings(api_key=api_key)
+
     return llm, embeddings
 
   @staticmethod
   def indexar_contexto_analitico(textos_analiticos, embeddings):
-    """Crea una base de datos vectorial Chroma en memoria."""
+    """Crea una base de datos vectorial Chroma en memoria sin colisiones."""
     vectorstore = Chroma.from_texts(
         texts=textos_analiticos,
         embedding=embeddings,
-        collection_name="analitica_wen_ia",
     )
     return vectorstore.as_retriever(search_kwargs={"k": 3})
 
@@ -342,7 +388,6 @@ class MotorRAG:
     vectorstore = Chroma.from_documents(
         documents=chunks,
         embedding=embeddings,
-        collection_name="docs_tecnicos_wen_ia",
     )
     return vectorstore.as_retriever(search_kwargs={"k": 4})
 
@@ -869,8 +914,14 @@ if archivo_cargado is not None:
           st.markdown(
               "#### Asistente Conversacional RAG Fundamentado en Resultados"
           )
+          tipo_emb = (
+              "Motor Vectorial In-Memory (Resiliente)"
+              if isinstance(embeddings_inst, LocalVectorEmbeddings)
+              else "Cloud Embeddings"
+          )
           st.caption(
-              f"Motor activo: **{proveedor_sel}**. Vectorización en ChromaDB."
+              f"Motor activo: **{proveedor_sel}** | Indexación: **{tipo_emb}**"
+              " en ChromaDB."
           )
 
           top_importancia = importancias.index[0]
