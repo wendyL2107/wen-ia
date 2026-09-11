@@ -302,7 +302,6 @@ class MotorRAG:
     if "Groq" in proveedor:
       from langchain_groq import ChatGroq
 
-      # Detección dinámica: Pregunta a la API de Groq cuáles modelos están activos en esta clave
       modelo_groq = "llama-3.1-8b-instant"
       try:
         import groq
@@ -312,49 +311,71 @@ class MotorRAG:
             m.id
             for m in client_g.models.list().data
             if not any(
-                filtro in m.id.lower()
-                for filtro in ["whisper", "guard", "embed", "safeguard"]
+                f in m.id.lower()
+                for f in ["whisper", "guard", "embed", "safeguard"]
             )
         ]
-        # Lista de prioridad según capacidad y calidad
-        prioridades = [
+        prioridades_groq = [
             "llama-3.3-70b-versatile",
             "llama-3.1-8b-instant",
             "llama3-70b-8192",
             "llama3-8b-8192",
             "mixtral-8x7b-32768",
-            "gemma2-9b-it",
         ]
-        for pref in prioridades:
-          if pref in modelos_activos:
-            modelo_groq = pref
+        for p in prioridades_groq:
+          if p in modelos_activos:
+            modelo_groq = p
             break
         else:
           if modelos_activos:
             modelo_groq = modelos_activos[0]
       except Exception:
-        modelo_groq = "llama3-8b-8192"
+        modelo_groq = "llama-3.1-8b-instant"
 
       llm = ChatGroq(
           model_name=modelo_groq,
-          temperature=0.1,
+          temperature=0.4,
           groq_api_key=api_key,
       )
       embeddings = LocalVectorEmbeddings()
 
     elif "Gemini" in proveedor:
       from langchain_google_genai import ChatGoogleGenerativeAI
+      import google.generativeai as genai
 
+      genai.configure(api_key=api_key)
+      modelo_gemini = "gemini-1.5-flash"
+
+      # Detección dinámica de modelos generativos permitidos por la API Key
       try:
-        llm = ChatGoogleGenerativeAI(
-            model="gemini-1.5-flash", temperature=0.1, google_api_key=api_key
-        )
+        disponibles = [
+            m.name.replace("models/", "")
+            for m in genai.list_models()
+            if "generateContent" in m.supported_generation_methods
+        ]
+        prioridades_gemini = [
+            "gemini-1.5-flash",
+            "gemini-1.5-flash-latest",
+            "gemini-2.0-flash",
+            "gemini-1.5-flash-002",
+            "gemini-1.5-pro",
+            "gemini-pro",
+        ]
+        for p in prioridades_gemini:
+          if p in disponibles:
+            modelo_gemini = p
+            break
+        else:
+          if disponibles:
+            modelo_gemini = disponibles[0]
       except Exception:
-        llm = ChatGoogleGenerativeAI(
-            model="gemini-1.5-flash-latest",
-            temperature=0.1,
-            google_api_key=api_key,
-        )
+        modelo_gemini = "gemini-1.5-flash"
+
+      llm = ChatGoogleGenerativeAI(
+          model=modelo_gemini,
+          temperature=0.3,
+          google_api_key=api_key,
+      )
 
       embeddings = None
       try:
@@ -371,7 +392,7 @@ class MotorRAG:
     else:
       from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
-      llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1, api_key=api_key)
+      llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.3, api_key=api_key)
       embeddings = OpenAIEmbeddings(api_key=api_key)
 
     return llm, embeddings
@@ -452,16 +473,24 @@ class MotorRAG:
 
   @staticmethod
   def generar_informe_ejecutivo(resumen_metricas, llm):
+    """Genera un reporte técnico formal aplicando restricciones anti-degeneración."""
     prompt = ChatPromptTemplate.from_template("""
         Eres un Director Científico y Consultor de IA Senior.
-        A partir del siguiente resumen analítico cuantitativo, redacta un INFORME TÉCNICO EJECUTIVO formal:
+        A partir del siguiente resumen analítico cuantitativo, redacta un INFORME TÉCNICO EJECUTIVO formal.
+        
+        REGLAS CRÍTICAS DE REDACCIÓN:
+        - Redacta cada sección UNA SOLA VEZ de manera analítica, clara y directa.
+        - PROHIBIDO repetir títulos, párrafos, listas o conclusiones.
+        - Una vez completada la sección 4, finaliza inmediatamente la respuesta.
+        
+        DATOS DE ENTRADA:
         {metricas}
         
-        Estructura formal en Markdown:
-        1. Resumen Ejecutivo y Objetivos
-        2. Hallazgos Analíticos Clave
-        3. Interpretación de Dinámica Multivariable y Riesgos/Anomalías
-        4. Recomendaciones Estratégicas Basadas en Evidencia Cuantitativa
+        ESTRUCTURA FORMAL EN MARKDOWN:
+        ## 1. Resumen Ejecutivo y Objetivos
+        ## 2. Hallazgos Analíticos y Factores Críticos
+        ## 3. Dinámica Multivariable y Evaluación de Anomalías
+        ## 4. Recomendaciones Estratégicas Basadas en Evidencia
         """)
     chain = prompt | llm | StrOutputParser()
     return chain.invoke({"metricas": resumen_metricas})
@@ -878,7 +907,7 @@ if archivo_cargado is not None:
           for i, idx in enumerate(sorted_idx):
             vals = shap_vals[:, idx]
             feat_vals = X_f.iloc[:, idx].values
-            norm_f = (feat_vals - feature_vals if "feature_vals" in locals() else feat_vals - feat_vals.min()) / (
+            norm_f = (feat_vals - feat_vals.min()) / (
                 feat_vals.max() - feat_vals.min() + 1e-8
             )
             jitter = np.random.normal(0, 0.05, size=len(vals))
