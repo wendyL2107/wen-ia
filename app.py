@@ -1,17 +1,27 @@
 # -*- coding: utf-8 -*-
 """
-Wen IA — WORKBENCH DE EXPLORACIÓN NUMÉRICA & RAG ENGINE (Streamlit Edition)
-Suite Científica Multivariable, Asistente RAG y Generador de Informes LLM
+Wen IA — WORKBENCH DE EXPLORACIÓN NUMÉRICA, RAG & BIG DATA ENGINE (Streamlit Edition)
+Suite Científica Multivariable, Asistente RAG Multi-Proveedor y Motor OLAP Columnar
 """
 
 import io
 import os
+import time
+import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.figure import Figure
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import streamlit as st
+
+# Módulos Big Data & OLAP Engine
+try:
+  import duckdb
+  import pyarrow as pa
+
+  BIGDATA_DISPONIBLE = True
+except ImportError:
+  BIGDATA_DISPONIBLE = False
 
 # Módulos de Aprendizaje Automático, Clustering y Reducción Dimensional
 try:
@@ -32,15 +42,18 @@ try:
 except ImportError:
   SHAP_DISPONIBLE = False
 
-# Módulos de RAG y LLMs (LangChain + ChromaDB + PyPDF)
+# Módulos de RAG y LLMs
 try:
-  from langchain.text_splitter import RecursiveCharacterTextSplitter
+  try:
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+  except ImportError:
+    from langchain.text_splitter import RecursiveCharacterTextSplitter
+
   from langchain_community.document_loaders import PyPDFLoader
   from langchain_community.vectorstores import Chroma
   from langchain_core.documents import Document
   from langchain_core.output_parsers import StrOutputParser
   from langchain_core.prompts import ChatPromptTemplate
-  from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
   LANGCHAIN_DISPONIBLE = True
 except ImportError:
@@ -50,7 +63,7 @@ except ImportError:
 # CONFIGURACIÓN DE PÁGINA Y ESTILO DE Wen IA
 # ==============================================================================
 st.set_page_config(
-    page_title="Wen IA — Workbench Científico & RAG Engine",
+    page_title="Wen IA — Workbench Científico, RAG & Big Data",
     page_icon="🔬",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -68,9 +81,7 @@ COLOR_TEXT_MUTED = "#5e5863"
 st.markdown(
     f"""
     <style>
-    .main {{
-        background-color: {COLOR_BASE_BG};
-    }}
+    .main {{ background-color: {COLOR_BASE_BG}; }}
     .badge-wen {{
         background-color: {COLOR_ROSE_DEEP};
         color: white;
@@ -101,7 +112,31 @@ st.markdown(
 
 
 # ==============================================================================
-# MOTOR MATEMÁTICO (PRESERVADO INTACTO)
+# MOTOR BIG DATA & ANALÍTICA VECTORIZADA
+# ==============================================================================
+class MotorBigData:
+
+  @staticmethod
+  def ejecutar_consulta_olap(df, consulta_sql):
+    """Ejecuta consultas vectorizadas en DuckDB sobre el dataset como tabla virtual."""
+    conn = duckdb.connect(database=":memory:")
+    # Registra el DataFrame directamente en el motor DuckDB sin serialización
+    conn.register("matriz_experimental", df)
+    res_df = conn.execute(consulta_sql).df()
+    conn.close()
+    return res_df
+
+  @staticmethod
+  def perfilar_volumen_y_memoria(df):
+    """Calcula métricas de huella de memoria y densidad de datos columnar."""
+    mem_bytes = df.memory_usage(deep=True).sum()
+    mem_mb = mem_bytes / (1024 * 1024)
+    num_celdas = df.shape[0] * df.shape[1]
+    return mem_mb, num_celdas
+
+
+# ==============================================================================
+# MOTOR MATEMÁTICO & APRENDIZAJE AUTOMÁTICO
 # ==============================================================================
 class MotorAnalitico:
 
@@ -116,7 +151,6 @@ class MotorAnalitico:
   def entrenar_random_forest(df, target):
     X = df.drop(columns=[target])
     y = df[target]
-
     if SKLEARN_DISPONIBLE:
       rf = RandomForestRegressor(n_estimators=100, random_state=42)
       rf.fit(X, y)
@@ -134,10 +168,8 @@ class MotorAnalitico:
   def calcular_pca_biplot(df):
     if not SKLEARN_DISPONIBLE:
       return None, None, None, None
-
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(df.values)
-
     pca = PCA(n_components=2)
     scores = pca.fit_transform(X_scaled)
     loadings = pca.components_
@@ -148,13 +180,10 @@ class MotorAnalitico:
   def calcular_clustering_jerarquico(df, metodo_enlace="ward", k_clusters=3):
     if not SKLEARN_DISPONIBLE:
       return None, None, None, None
-
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(df.values)
-
     Z = linkage(X_scaled, method=metodo_enlace)
     c, _ = cophenet(Z, pdist(X_scaled))
-
     n_clusters = min(k_clusters, len(df))
     asignaciones = fcluster(Z, t=n_clusters, criterion="maxclust")
     return Z, c, asignaciones, n_clusters
@@ -163,23 +192,20 @@ class MotorAnalitico:
   def calcular_topsis(df, pesos=None, criterios_beneficio=None):
     X = df.values.astype(float)
     n_muestras, n_criterios = X.shape
-
     norm = np.linalg.norm(X, axis=0)
     norm[norm == 0] = 1.0
     X_norm = X / norm
-
-    if pesos is None:
-      w = np.ones(n_criterios) / n_criterios
-    else:
-      w = np.array(pesos) / np.sum(pesos)
+    w = (
+        np.ones(n_criterios) / n_criterios
+        if pesos is None
+        else np.array(pesos) / np.sum(pesos)
+    )
     X_pond = X_norm * w
-
     if criterios_beneficio is None:
       criterios_beneficio = [True] * n_criterios
 
     a_pos = np.zeros(n_criterios)
     a_neg = np.zeros(n_criterios)
-
     for j in range(n_criterios):
       if criterios_beneficio[j]:
         a_pos[j] = np.max(X_pond[:, j])
@@ -190,22 +216,18 @@ class MotorAnalitico:
 
     d_pos = np.sqrt(np.sum((X_pond - a_pos) ** 2, axis=1))
     d_neg = np.sqrt(np.sum((X_pond - a_neg) ** 2, axis=1))
-
     denom = d_pos + d_neg
     denom[denom == 0] = 1.0
-    puntajes = d_neg / denom
-    return puntajes, a_pos, a_neg
+    return d_neg / denom, a_pos, a_neg
 
   @staticmethod
   def calcular_shap_explicabilidad(df, target):
     if not SKLEARN_DISPONIBLE:
       return None, None, None
-
     X = df.drop(columns=[target])
     y = df[target]
     rf = RandomForestRegressor(n_estimators=100, random_state=42)
     rf.fit(X, y)
-
     if SHAP_DISPONIBLE:
       explainer = shap.TreeExplainer(rf)
       shap_values = explainer.shap_values(X)
@@ -215,26 +237,22 @@ class MotorAnalitico:
       for col_idx, col_name in enumerate(X.columns):
         X_mod = X.copy()
         X_mod[col_name] = X[col_name].mean()
-        pred_mod = rf.predict(X_mod)
-        shap_values[:, col_idx] = base_pred - pred_mod
-
+        shap_values[:, col_idx] = base_pred - rf.predict(X_mod)
     return shap_values, X, list(X.columns)
 
   @staticmethod
   def detectar_anomalias(df):
     if not SKLEARN_DISPONIBLE:
       return None, None
-
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(df.values)
-
     iso = IsolationForest(contamination=0.15, random_state=42)
     preds_iso = iso.fit_predict(X_scaled)
-
     cov = np.cov(X_scaled, rowvar=False)
-    cov_inv = np.linalg.pinv(cov)
     diff = X_scaled - np.mean(X_scaled, axis=0)
-    dist_mahal = np.sqrt(np.sum(np.dot(diff, cov_inv) * diff, axis=1))
+    dist_mahal = np.sqrt(
+        np.sum(np.dot(diff, np.linalg.pinv(cov)) * diff, axis=1)
+    )
     return preds_iso, dist_mahal
 
 
@@ -244,18 +262,35 @@ class MotorAnalitico:
 class MotorRAG:
 
   @staticmethod
-  def obtener_llm_y_embeddings(api_key):
-    llm = ChatOpenAI(
-        model="gpt-4o-mini",
-        temperature=0.1,  # Temperatura baja para mitigar alucinaciones
-        api_key=api_key,
-    )
-    embeddings = OpenAIEmbeddings(api_key=api_key)
+  def inicializar_proveedor(proveedor, api_key):
+    if "Gemini" in proveedor:
+      from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
+
+      llm = ChatGoogleGenerativeAI(
+          model="gemini-1.5-flash", temperature=0.1, google_api_key=api_key
+      )
+      embeddings = GoogleGenerativeAIEmbeddings(
+          model="models/text-embedding-004", google_api_key=api_key
+      )
+    elif "Groq" in proveedor:
+      from langchain_community.embeddings.fastembed import FastEmbedEmbeddings
+      from langchain_groq import ChatGroq
+
+      llm = ChatGroq(
+          model_name="llama-3.1-8b-instant",
+          temperature=0.1,
+          groq_api_key=api_key,
+      )
+      embeddings = FastEmbedEmbeddings()
+    else:
+      from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+
+      llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1, api_key=api_key)
+      embeddings = OpenAIEmbeddings(api_key=api_key)
     return llm, embeddings
 
   @staticmethod
   def indexar_contexto_analitico(textos_analiticos, embeddings):
-    """Crea una base de datos vectorial Chroma en memoria con los reportes numéricos."""
     vectorstore = Chroma.from_texts(
         texts=textos_analiticos,
         embedding=embeddings,
@@ -265,50 +300,41 @@ class MotorRAG:
 
   @staticmethod
   def consultar_asistente_rag(retriever, llm, pregunta_usuario):
-    """Ejecuta una cadena de recuperación fundamentada sin alucinaciones."""
     docs_rel = retriever.invoke(pregunta_usuario)
     contexto = "\n\n".join(
         [f"[Fragmento {i+1}]: {d.page_content}" for i, d in enumerate(docs_rel)]
     )
-
     prompt = ChatPromptTemplate.from_template("""
         Eres el asistente científico senior de Wen IA. 
-        Responde a la consulta del usuario basándote ESTRICTAMENTE en el siguiente contexto analítico y experimental.
-        Si la información no está sustentada directamente en el contexto, di con honestidad que los datos numéricos actuales no contienen esa información. No inventes datos.
+        Responde basándote ESTRICTAMENTE en el siguiente contexto. No inventes información.
         
-        CONTEXTO RECUPERADO:
+        CONTEXTO:
         {context}
         
-        PREGUNTA DEL INVESTIGADOR:
+        PREGUNTA:
         {question}
         
-        RESPUESTA TÉCNICA ESTRUCTURADA:
+        RESPUESTA ESTRUCTURADA:
         """)
-
     chain = prompt | llm | StrOutputParser()
-    respuesta = chain.invoke(
+    return chain.invoke(
         {"context": contexto, "question": pregunta_usuario}
-    )
-    return respuesta, docs_rel
+    ), docs_rel
 
   @staticmethod
   def procesar_documento_pdf(uploaded_file, embeddings):
-    """Carga, particiona semánticamente e indexa documentos PDF en ChromaDB."""
     import tempfile
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
       tmp.write(uploaded_file.read())
       tmp_path = tmp.name
-
     loader = PyPDFLoader(tmp_path)
     docs = loader.load()
     os.remove(tmp_path)
-
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=700, chunk_overlap=100
     )
     chunks = text_splitter.split_documents(docs)
-
     vectorstore = Chroma.from_documents(
         documents=chunks,
         embedding=embeddings,
@@ -323,19 +349,11 @@ class MotorRAG:
         f"[Página {d.metadata.get('page', 'N/A')}]: {d.page_content}"
         for d in docs_rel
     ])
-
     prompt = ChatPromptTemplate.from_template("""
-        Eres un asistente de documentación técnica e investigación.
-        Responde la pregunta basándote ÚNICAMENTE en los fragmentos del documento recuperados a continuación.
-        Cita explícitamente el número de página cuando fundamentes cada afirmación.
-        
-        FRAGMENTOS RECUPERADOS:
+        Responde fundamentándote ÚNICAMENTE en los fragmentos del documento adjuntos, citando la página:
         {context}
         
-        PREGUNTA:
-        {question}
-        
-        RESPUESTA DOCUMENTADA:
+        PREGUNTA: {question}
         """)
     chain = prompt | llm | StrOutputParser()
     return chain.invoke({"context": contexto, "question": pregunta}), docs_rel
@@ -343,17 +361,14 @@ class MotorRAG:
   @staticmethod
   def generar_informe_ejecutivo(resumen_metricas, llm):
     prompt = ChatPromptTemplate.from_template("""
-        Eres un Director Científico y Consultor de IA Senior.
-        A partir del siguiente resumen analítico cuantitativo generado por Wen IA, redacta un INFORME TÉCNICO EJECUTIVO formal:
-        
-        MÉTRICAS Y RESULTADOS ANALÍTICOS:
+        Redacta un informe técnico formal en Markdown a partir de estas métricas:
         {metricas}
         
-        Estructura el reporte en las siguientes secciones formales en formato Markdown:
-        1. Resumen Ejecutivo y Objetivos
-        2. Hallazgos Analíticos Clave (Factores de Mayor Impacto y Correlaciones)
-        3. Interpretación de la Dinámica Multivariable y Riesgos/Anomalías
-        4. Recomendaciones Estratégicas Basadas en Evidencia Cuantitativa
+        Estructura:
+        1. Resumen Ejecutivo
+        2. Hallazgos Analíticos y Factores Críticos
+        3. Evaluación de Anomalías e Inferencia
+        4. Conclusiones y Recomendaciones Basadas en Evidencia
         """)
     chain = prompt | llm | StrOutputParser()
     return chain.invoke({"metricas": resumen_metricas})
@@ -367,29 +382,46 @@ with col_badge:
   st.markdown('<div class="badge-wen">Wen IA</div>', unsafe_allow_html=True)
 with col_title:
   st.markdown(
-      "### **W**orkbench de **E**xploración **N**umérica, **IA** & **RAG**"
+      "### **W**orkbench de **E**xploración **N**umérica, **IA**, **RAG** &"
+      " **Big Data**"
   )
   st.caption(
-      "Plataforma Integrada de Análisis Multivariable, Optimización, Recuperación"
-      " Semántica (RAG) y LLMs"
+      "Plataforma Unificada de Análisis Multivariable, Inferencia en Tiempo"
+      " Real, Motor OLAP Vectorizado y RAG"
   )
 
 st.divider()
 
 # ==============================================================================
-# BARRA LATERAL (SIDEBAR): CONFIGURACIÓN, LLM KEYS Y DATOS
+# BARRA LATERAL (SIDEBAR)
 # ==============================================================================
 st.sidebar.header("🔑 Configuración de Inteligencia Artificial")
+proveedor_sel = st.sidebar.selectbox(
+    "Proveedor de IA / LLM:",
+    [
+        "Google Gemini (Gratuito / Free Tier)",
+        "Groq / LLaMA 3.1 (Ultra rápido / Gratuito)",
+        "OpenAI (GPT-4o-mini)",
+    ],
+)
+
+if "Gemini" in proveedor_sel:
+  help_text = "Obtén tu API key en: https://aistudio.google.com/app/apikey"
+  env_var = "GEMINI_API_KEY"
+elif "Groq" in proveedor_sel:
+  help_text = "Obtén tu API key en: https://console.groq.com/keys"
+  env_var = "GROQ_API_KEY"
+else:
+  help_text = "Obtén tu API key en: https://platform.openai.com/api-keys"
+  env_var = "OPENAI_API_KEY"
+
 api_key_input = st.sidebar.text_input(
-    "OpenAI API Key (para módulos RAG/LLM):",
+    f"API Key ({proveedor_sel.split(' ')[0]}):",
     type="password",
-    help=(
-        "Introduce tu clave de API para habilitar el chat semántico y la"
-        " generación de reportes."
-    ),
+    help=help_text,
 )
 if not api_key_input:
-  api_key_input = os.environ.get("OPENAI_API_KEY", "")
+  api_key_input = os.environ.get(env_var, "")
 
 st.sidebar.header("📁 Datos de Entrada")
 archivo_cargado = st.sidebar.file_uploader(
@@ -401,7 +433,7 @@ with st.sidebar.expander("📋 Guía Metodológica"):
   st.write("""
     * **Fila 1:** Nombres de las variables cuantitativas.
     * **Fila 2+:** Datos numéricos sin valores faltantes.
-    * **Columna 1 (opcional):** Etiquetas de muestras (ej. P1, P2) para rotular gráficos.
+    * **Columna 1 (opcional):** Etiquetas de muestras para rotular gráficos.
     """)
 
 if archivo_cargado is not None:
@@ -423,11 +455,8 @@ if archivo_cargado is not None:
     )
 
     st.sidebar.success(f"Matriz cargada: N={N} muestras, M={M} variables")
-
-    # Selector de Variable Objetivo
     target = st.sidebar.selectbox("1. Variable Objetivo (Target):", cols_num)
 
-    # Selector de Gráfico
     opciones_graficos = [
         "🔥 1. Mapa de Calor (Heatmap de Pearson)",
         "🧭 2. PCA Biplot 2D (Muestras y Cargas)",
@@ -459,7 +488,7 @@ if archivo_cargado is not None:
     col_consola, col_grafico = st.columns([1, 1.4])
 
     with col_consola:
-      st.subheader("Consola de Diagnóstico")
+      st.subheader("Consola de Diagnóstico & Big Data")
 
       top_var = corr_ord.index[0]
       efecto = "incrementar" if corr_target[top_var] > 0 else "disminuir"
@@ -468,7 +497,13 @@ if archivo_cargado is not None:
           f" tiende a **{efecto}** `{target}`."
       )
 
-      tab1, tab2 = st.tabs(["Correlación (Pearson)", f"Influencia ({metodo})"])
+      # Inclusión de pestañas: Correlación, Influencia y NUEVO Motor Big Data SQL
+      tab1, tab2, tab_sql = st.tabs([
+          "Correlación (Pearson)",
+          f"Influencia ({metodo})",
+          "⚡ Big Data & SQL Analytics",
+      ])
+
       with tab1:
         df_corr_show = pd.DataFrame({
             "Variable": corr_ord.index,
@@ -488,6 +523,50 @@ if archivo_cargado is not None:
             "Peso Relativo (%)": (importancias.values * 100).round(2),
         })
         st.dataframe(df_imp_show, use_container_width=True, hide_index=True)
+
+      # ------------------------------------------------------------------
+      # SUB-MÓDULO: BIG DATA ANALYTICS CON DUCKDB
+      # ------------------------------------------------------------------
+      with tab_sql:
+        st.markdown("##### Motor OLAP In-Memory (DuckDB & Apache Arrow)")
+        st.caption(
+            "Ejecuta consultas analíticas a escala sobre la matriz de datos con"
+            " ejecución columnar vectorizada de alto rendimiento."
+        )
+
+        if BIGDATA_DISPONIBLE:
+          mem_mb, celdas = MotorBigData.perfilar_volumen_y_memoria(df_num)
+          c1, c2 = st.columns(2)
+          c1.metric("Huella en Memoria", f"{mem_mb:.3f} MB")
+          c2.metric("Total de Celdas Procesadas", f"{celdas:,}")
+
+          query_defecto = (
+              f"SELECT AVG({target}) as media_target, STDDEV({target}) as"
+              f" desv_target, COUNT(*) as total_filas FROM matriz_experimental"
+          )
+          sql_query = st.text_area(
+              "Consulta SQL vectorizada:",
+              value=query_defecto,
+              height=70,
+              help="La tabla está registrada como 'matriz_experimental'.",
+          )
+
+          if st.button("⚡ Ejecutar Consulta OLAP"):
+            t_inicio = time.perf_counter()
+            try:
+              df_sql_res = MotorBigData.ejecutar_consulta_olap(df_num, sql_query)
+              latencia = (time.perf_counter() - t_inicio) * 1000
+              st.success(
+                  f"Ejecución completada en **{latencia:.2f} ms** mediante"
+                  " DuckDB Vectorized Engine."
+              )
+              st.dataframe(df_sql_res, use_container_width=True)
+            except Exception as e_sql:
+              st.error(f"Error en consulta SQL: {e_sql}")
+        else:
+          st.warning(
+              "Instala duckdb y pyarrow para habilitar el motor OLAP columnar."
+          )
 
       with st.expander(
           "🔬 Simulador Predictivo In Silico (What-If)", expanded=False
@@ -735,12 +814,7 @@ if archivo_cargado is not None:
               COLOR_ROSE_DEEP if p == -1 else COLOR_ROSE_LIGHT
               for p in preds_iso
           ]
-          ax.bar(
-              x_pos,
-              d_mahal,
-              color=cols_anom,
-              edgecolor=COLOR_TEXT_MAIN,
-          )
+          ax.bar(x_pos, d_mahal, color=cols_anom, edgecolor=COLOR_TEXT_MAIN)
           umbral_m = np.percentile(d_mahal, 85)
           ax.axhline(
               umbral_m,
@@ -761,212 +835,170 @@ if archivo_cargado is not None:
       st.pyplot(fig)
 
     # ======================================================================
-    # NUEVA SECCIÓN DE ALTO IMPACTO: SUITE RAG & LLMs
+    # SUITE RAG & LLMs MULTI-PROVEEDOR
     # ======================================================================
     st.divider()
     st.subheader("🧠 Suite de Inteligencia Artificial: RAG & Asistente LLM")
 
     if not LANGCHAIN_DISPONIBLE:
-      st.warning(
-          "⚠️ Las dependencias de RAG (LangChain / ChromaDB) no están"
-          " instaladas. Ejecuta `pip install langchain langchain-openai"
-          " langchain-community chromadb` para activarlas."
-      )
+      st.warning("⚠️ Dependencias de RAG incompletas en requirements.txt.")
     elif not api_key_input:
       st.info(
-          "💡 Por favor ingresa tu **OpenAI API Key** en la barra lateral para"
-          " interactuar con el motor RAG en vivo."
+          f"💡 Ingresa tu clave de API para **{proveedor_sel}** en la barra"
+          " lateral para activar los módulos RAG."
       )
     else:
-      llm_inst, embeddings_inst = MotorRAG.obtener_llm_y_embeddings(
-          api_key_input
-      )
-
-      tab_rag1, tab_rag2, tab_rag3 = st.tabs([
-          "💬 Módulo 1: Asistente RAG Analítico",
-          "📚 Módulo 2: RAG sobre Documentación Técnica",
-          "📄 Módulo 3: Generador de Reportes Ejecutivos",
-      ])
-
-      # ------------------------------------------------------------------
-      # MÓDULO 1: RAG SOBRE REPORTES Y DIAGNÓSTICOS NUMÉRICOS
-      # ------------------------------------------------------------------
-      with tab_rag1:
-        st.markdown(
-            "#### Asistente Conversacional RAG Fundamentado en Resultados"
+      try:
+        llm_inst, embeddings_inst = MotorRAG.inicializar_proveedor(
+            proveedor_sel, api_key_input
         )
-        st.caption(
-            "Este módulo vectoriza las correlaciones, importancias de Random"
-            " Forest, métricas PCA y anomalías para responder preguntas sin"
-            " alucinaciones."
-        )
+        tab_rag1, tab_rag2, tab_rag3 = st.tabs([
+            "💬 Módulo 1: Asistente RAG Analítico",
+            "📚 Módulo 2: RAG sobre Documentación Técnica",
+            "📄 Módulo 3: Generador de Reportes Ejecutivos",
+        ])
 
-        # Preparación estructurada del contexto analítico
-        top_importancia = importancias.index[0]
-        porcentaje_top = importancias.values[0] * 100
-        anomalias_detectadas = [
-            etiquetas[i] for i, p in enumerate(preds_iso) if p == -1
-        ]
-
-        textos_analiticos = [
-            (
-                f"La variable objetivo (target) seleccionada para el modelo es"
-                f" '{target}'. El conjunto de datos tiene {N} muestras y {M}"
-                " variables numéricas."
-            ),
-            (
-                f"La variable más influyente sobre '{target}' según Random"
-                f" Forest es '{top_importancia}', explicando el"
-                f" {porcentaje_top:.2f}% de la varianza del modelo."
-            ),
-            (
-                f"La variable con mayor correlación lineal con '{target}' es"
-                f" '{top_var}', con un coeficiente r de"
-                f" {corr_target[top_var]:.3f} (efecto de {efecto} la variable"
-                " objetivo)."
-            ),
-            (
-                "En el análisis de componentes principales (PCA), las dos"
-                " primeras componentes explican el"
-                f" {np.sum(var_exp):.2f}% de la varianza total acumulada."
-            ),
-            (
-                "En el clustering jerárquico con método Ward, el coeficiente de"
-                f" correlación cofenética obtenido es {cophenet_val:.3f}."
-            ),
-            (
-                "El control de calidad con Isolation Forest identificó las"
-                f" siguientes muestras como anomalías o valores atípicos:"
-                f" {', '.join(anomalias_detectadas) if anomalias_detectadas else 'Ninguna muestra atípica severa detectada'}."
-            ),
-        ]
-
-        # Creación del vectorstore en memoria (Chroma)
-        retriever_analitico = MotorRAG.indexar_contexto_analitico(
-            textos_analiticos, embeddings_inst
-        )
-
-        pregunta_analitica = st.text_input(
-            "Pregúntale a WEN-Assistant sobre este diagnóstico:",
-            placeholder=(
-                "Ej: ¿Cuáles son las 2 variables que más influyen en el"
-                " resultado y qué anomalías se detectaron?"
-            ),
-        )
-
-        if pregunta_analitica:
-          with st.spinner("Recuperando embeddings y generando respuesta..."):
-            try:
-              respuesta, docs_fuente = MotorRAG.consultar_asistente_rag(
-                  retriever_analitico, llm_inst, pregunta_analitica
-              )
-              st.markdown(f'<div class="rag-box">{respuesta}</div>', unsafe_allow_html=True)
-              with st.expander("🔍 Ver fragmentos vectoriales recuperados (Grounding)"):
-                for d in docs_fuente:
-                  st.code(d.page_content)
-            except Exception as e:
-              st.error(f"Error consultando el modelo: {e}")
-
-      # ------------------------------------------------------------------
-      # MÓDULO 2: RAG SOBRE DOCUMENTACIÓN TÉCNICA (PDF)
-      # ------------------------------------------------------------------
-      with tab_rag2:
-        st.markdown("#### Búsqueda Semántica RAG sobre Documentación / PDFs")
-        st.caption(
-            "Sube un manual, guía clínica o artículo técnico. El sistema"
-            " realizará partición semántica e indexación vectorial en"
-            " ChromaDB."
-        )
-
-        pdf_cargado = st.file_uploader(
-            "Carga un archivo de referencia (.pdf)",
-            type=["pdf"],
-            key="pdf_uploader",
-        )
-
-        if pdf_cargado:
-          with st.spinner(
-              "Procesando texto, generando embeddings e indexando en"
-              " ChromaDB..."
-          ):
-            retriever_pdf = MotorRAG.procesar_documento_pdf(
-                pdf_cargado, embeddings_inst
-            )
-            st.success(
-                f"Documento '{pdf_cargado.name}' indexado vectorialmente con"
-                " éxito."
-            )
-
-          pregunta_doc = st.text_input(
-              "Consulta la documentación en lenguaje natural:",
-              placeholder=(
-                  "Ej: ¿Qué procedimiento se recomienda para la calibración o"
-                  " cuáles son las limitaciones del método?"
-              ),
-              key="pregunta_doc",
+        with tab_rag1:
+          st.markdown(
+              "#### Asistente Conversacional RAG Fundamentado en Resultados"
+          )
+          st.caption(
+              f"Motor activo: **{proveedor_sel}**. Vectorización en ChromaDB."
           )
 
-          if pregunta_doc:
-            with st.spinner("Buscando en la base de datos vectorial..."):
+          top_importancia = importancias.index[0]
+          porcentaje_top = importancias.values[0] * 100
+          anomalias_detectadas = [
+              etiquetas[i] for i, p in enumerate(preds_iso) if p == -1
+          ]
+
+          textos_analiticos = [
+              (
+                  f"Variable objetivo: '{target}'. Muestra: {N} observaciones,"
+                  f" {M} variables."
+              ),
+              (
+                  f"Variable más influyente: '{top_importancia}'"
+                  f" ({porcentaje_top:.2f}% de peso en Random Forest)."
+              ),
+              (
+                  f"Variable con mayor correlación: '{top_var}' (r ="
+                  f" {corr_target[top_var]:.3f}, efecto {efecto})."
+              ),
+              (
+                  "Varianza acumulada en 2 componentes de PCA:"
+                  f" {np.sum(var_exp):.2f}%."
+              ),
+              f"Coeficiente cofenético Ward: {cophenet_val:.3f}.",
+              (
+                  "Anomalías detectadas (Isolation Forest):"
+                  f" {', '.join(anomalias_detectadas) if anomalias_detectadas else 'Ninguna'}."
+              ),
+          ]
+
+          retriever_analitico = MotorRAG.indexar_contexto_analitico(
+              textos_analiticos, embeddings_inst
+          )
+          pregunta_analitica = st.text_input(
+              "Pregúntale a WEN-Assistant sobre este diagnóstico:",
+              placeholder=(
+                  "Ej: ¿Cuáles variables dominan el modelo y qué anomalías se"
+                  " detectaron?"
+              ),
+          )
+
+          if pregunta_analitica:
+            with st.spinner("Recuperando contexto analítico..."):
               try:
-                resp_doc, fragmentos = MotorRAG.consultar_documentacion(
-                    retriever_pdf, llm_inst, pregunta_doc
+                respuesta, docs_fuente = MotorRAG.consultar_asistente_rag(
+                    retriever_analitico, llm_inst, pregunta_analitica
                 )
-                st.markdown(f'<div class="rag-box">{resp_doc}</div>', unsafe_allow_html=True)
-                with st.expander("📖 Evidencia recuperada del PDF"):
-                  for f in fragmentos:
-                    st.write(
-                        f"**Página {f.metadata.get('page', 'N/A')}:**"
-                        f" {f.page_content}"
-                    )
+                st.markdown(
+                    f'<div class="rag-box">{respuesta}</div>',
+                    unsafe_allow_html=True,
+                )
+                with st.expander(
+                    "🔍 Ver fragmentos vectoriales recuperados (Grounding)"
+                ):
+                  for d in docs_fuente:
+                    st.code(d.page_content)
               except Exception as e:
-                st.error(f"Error en la consulta: {e}")
+                st.error(f"Error en consulta: {e}")
 
-      # ------------------------------------------------------------------
-      # MÓDULO 3: GENERADOR AUTOMÁTICO DE INFORMES EJECUTIVOS
-      # ------------------------------------------------------------------
-      with tab_rag3:
-        st.markdown(
-            "#### Generación Automatizada de Reportes Técnicos / Ejecutivos"
-        )
-        st.caption(
-            "Sintetiza todas las métricas matemáticas y algoritmos entrenados"
-            " en un informe formal estructurado en segundos."
-        )
-
-        resumen_datos = f"""
-            - Variable objetivo analizada: {target}
-            - Tamaño de muestra: {N} observaciones con {M} variables cuantitativas.
-            - Variable con mayor impacto predictivo (Random Forest): {top_importancia} ({porcentaje_top:.2f}% de peso).
-            - Variable con mayor correlación: {top_var} (r = {corr_target[top_var]:.3f}).
-            - Varianza acumulada en PCA (2 componentes): {np.sum(var_exp):.2f}%.
-            - Correlación cofenética de agrupamiento jerárquico: {cophenet_val:.3f}.
-            - Muestras atípicas / anomalías (Isolation Forest): {', '.join(anomalias_detectadas) if anomalias_detectadas else 'Ninguna observada'}.
-            """
-
-        if st.button("🚀 Generar Informe Técnico Asistido por IA"):
-          with st.spinner("Redactando informe ejecutivo con LLM..."):
-            try:
-              informe_generado = MotorRAG.generar_informe_ejecutivo(
-                  resumen_datos, llm_inst
+        with tab_rag2:
+          st.markdown("#### Búsqueda Semántica RAG sobre Documentación / PDFs")
+          pdf_cargado = st.file_uploader(
+              "Carga un manual o artículo (.pdf)",
+              type=["pdf"],
+              key="pdf_uploader",
+          )
+          if pdf_cargado:
+            with st.spinner("Generando embeddings semánticos en ChromaDB..."):
+              retriever_pdf = MotorRAG.procesar_documento_pdf(
+                  pdf_cargado, embeddings_inst
               )
-              st.markdown("### 📋 Informe Técnico Ejecutivo Generado")
-              st.markdown(informe_generado)
+              st.success(f"'{pdf_cargado.name}' indexado exitosamente.")
 
-              # Descarga del informe en formato Markdown
-              st.download_button(
-                  label="📥 Descargar Informe (.md)",
-                  data=informe_generado,
-                  file_name=f"Informe_Tecnico_{target}_WenIA.md",
-                  mime="text/markdown",
-              )
-            except Exception as e:
-              st.error(f"Error generando el informe: {e}")
+            pregunta_doc = st.text_input(
+                "Consulta la documentación en lenguaje natural:",
+                key="pregunta_doc",
+            )
+            if pregunta_doc:
+              with st.spinner("Buscando en la base vectorial..."):
+                try:
+                  resp_doc, fragmentos = MotorRAG.consultar_documentacion(
+                      retriever_pdf, llm_inst, pregunta_doc
+                  )
+                  st.markdown(
+                      f'<div class="rag-box">{resp_doc}</div>',
+                      unsafe_allow_html=True,
+                  )
+                  with st.expander("📖 Evidencia recuperada"):
+                    for f in fragmentos:
+                      st.write(
+                          f"**Página {f.metadata.get('page', 'N/A')}:**"
+                          f" {f.page_content}"
+                      )
+                except Exception as e:
+                  st.error(f"Error en la consulta: {e}")
+
+        with tab_rag3:
+          st.markdown(
+              "#### Generación Automatizada de Reportes Técnicos / Ejecutivos"
+          )
+          resumen_datos = f"""
+                - Proveedor: {proveedor_sel}
+                - Variable objetivo: {target}
+                - Observaciones: {N} filas, {M} variables.
+                - Predictor principal: {top_importancia} ({porcentaje_top:.2f}%).
+                - Correlación líder: {top_var} (r = {corr_target[top_var]:.3f}).
+                - Varianza PCA (2D): {np.sum(var_exp):.2f}%.
+                - Cofenético Ward: {cophenet_val:.3f}.
+                - Anomalías: {', '.join(anomalias_detectadas) if anomalias_detectadas else 'Ninguna'}.
+                """
+          if st.button("🚀 Generar Informe Técnico Asistido por IA"):
+            with st.spinner("Redactando informe ejecutivo..."):
+              try:
+                informe_generado = MotorRAG.generar_informe_ejecutivo(
+                    resumen_datos, llm_inst
+                )
+                st.markdown(informe_generado)
+                st.download_button(
+                    label="📥 Descargar Informe (.md)",
+                    data=informe_generado,
+                    file_name=f"Informe_Tecnico_{target}_WenIA.md",
+                    mime="text/markdown",
+                )
+              except Exception as e:
+                st.error(f"Error generando informe: {e}")
+
+      except Exception as err_init:
+        st.error(f"Error al inicializar {proveedor_sel}: {err_init}")
 
   except Exception as err:
-    st.error(f"Error procesando la matriz: {err}")
+    st.error(f"Error procesando datos: {err}")
 else:
   st.info(
-      "👈 Por favor, carga tu archivo de datos (.xlsx, .ods) desde la barra"
-      " lateral izquierda para iniciar el análisis y activar los módulos RAG."
+      "👈 Carga tu archivo experimental (.xlsx, .ods) desde la barra lateral"
+      " para activar el motor analítico y RAG."
   )
