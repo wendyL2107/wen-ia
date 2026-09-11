@@ -298,8 +298,51 @@ class MotorRAG:
 
   @staticmethod
   def inicializar_proveedor(proveedor, api_key):
-    """Inicializa LLM y Embeddings con arquitectura tolerante a fallos de API."""
-    if "Gemini" in proveedor:
+    """Inicializa LLM y Embeddings con detección dinámica de modelos activos."""
+    if "Groq" in proveedor:
+      from langchain_groq import ChatGroq
+
+      # Detección dinámica: Pregunta a la API de Groq cuáles modelos están activos en esta clave
+      modelo_groq = "llama-3.1-8b-instant"
+      try:
+        import groq
+
+        client_g = groq.Groq(api_key=api_key)
+        modelos_activos = [
+            m.id
+            for m in client_g.models.list().data
+            if not any(
+                filtro in m.id.lower()
+                for filtro in ["whisper", "guard", "embed", "safeguard"]
+            )
+        ]
+        # Lista de prioridad según capacidad y calidad
+        prioridades = [
+            "llama-3.3-70b-versatile",
+            "llama-3.1-8b-instant",
+            "llama3-70b-8192",
+            "llama3-8b-8192",
+            "mixtral-8x7b-32768",
+            "gemma2-9b-it",
+        ]
+        for pref in prioridades:
+          if pref in modelos_activos:
+            modelo_groq = pref
+            break
+        else:
+          if modelos_activos:
+            modelo_groq = modelos_activos[0]
+      except Exception:
+        modelo_groq = "llama3-8b-8192"
+
+      llm = ChatGroq(
+          model_name=modelo_groq,
+          temperature=0.1,
+          groq_api_key=api_key,
+      )
+      embeddings = LocalVectorEmbeddings()
+
+    elif "Gemini" in proveedor:
       from langchain_google_genai import ChatGoogleGenerativeAI
 
       try:
@@ -323,26 +366,8 @@ class MotorRAG:
         cand.embed_query("test")
         embeddings = cand
       except Exception:
-        try:
-          from langchain_google_genai import GoogleGenerativeAIEmbeddings
+        embeddings = LocalVectorEmbeddings()
 
-          cand = GoogleGenerativeAIEmbeddings(
-              model="text-embedding-004", google_api_key=api_key
-          )
-          cand.embed_query("test")
-          embeddings = cand
-        except Exception:
-          embeddings = LocalVectorEmbeddings()
-
-    elif "Groq" in proveedor:
-      from langchain_groq import ChatGroq
-
-      llm = ChatGroq(
-          model_name="llama-3.3-70b-versatile",
-          temperature=0.1,
-          groq_api_key=api_key,
-      )
-      embeddings = LocalVectorEmbeddings()
     else:
       from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
@@ -467,7 +492,7 @@ st.sidebar.header("🔑 Configuración de Inteligencia Artificial")
 proveedor_sel = st.sidebar.selectbox(
     "Proveedor de IA / LLM:",
     [
-        "Groq / LLaMA 3.3 (Ultra rápido / Gratuito)",
+        "Groq / LLaMA (Ultra rápido / Gratuito)",
         "Google Gemini (Gratuito / Free Tier)",
         "OpenAI (GPT-4o-mini)",
     ],
@@ -582,14 +607,14 @@ if archivo_cargado is not None:
                 for v in corr_ord.index
             ],
         })
-        st.dataframe(df_corr_show, use_container_width=True, hide_index=True)
+        st.dataframe(df_corr_show, width="stretch", hide_index=True)
 
       with tab2:
         df_imp_show = pd.DataFrame({
             "Variable": importancias.index,
             "Peso Relativo (%)": (importancias.values * 100).round(2),
         })
-        st.dataframe(df_imp_show, use_container_width=True, hide_index=True)
+        st.dataframe(df_imp_show, width="stretch", hide_index=True)
 
       # ------------------------------------------------------------------
       # SUB-MÓDULO: BIG DATA ANALYTICS CON DUCKDB
@@ -627,7 +652,7 @@ if archivo_cargado is not None:
                   f"Ejecución completada en **{latencia:.2f} ms** mediante"
                   " DuckDB Vectorized Engine."
               )
-              st.dataframe(df_sql_res, use_container_width=True)
+              st.dataframe(df_sql_res, width="stretch")
             except Exception as e_sql:
               st.error(f"Error en consulta SQL: {e_sql}")
         else:
@@ -853,7 +878,7 @@ if archivo_cargado is not None:
           for i, idx in enumerate(sorted_idx):
             vals = shap_vals[:, idx]
             feat_vals = X_f.iloc[:, idx].values
-            norm_f = (feat_vals - feat_vals.min()) / (
+            norm_f = (feat_vals - feature_vals if "feature_vals" in locals() else feat_vals - feat_vals.min()) / (
                 feat_vals.max() - feat_vals.min() + 1e-8
             )
             jitter = np.random.normal(0, 0.05, size=len(vals))
@@ -934,9 +959,12 @@ if archivo_cargado is not None:
               if isinstance(embeddings_inst, LocalVectorEmbeddings)
               else "Cloud Embeddings"
           )
+          modelo_activo_nombre = getattr(
+              llm_inst, "model_name", getattr(llm_inst, "model", "Activo")
+          )
           st.caption(
-              f"Motor activo: **{proveedor_sel}** | Indexación: **{tipo_emb}**"
-              " en ChromaDB."
+              f"Motor activo: **{proveedor_sel}** (`{modelo_activo_nombre}`) |"
+              f" Indexación: **{tipo_emb}** en ChromaDB."
           )
 
           top_importancia = importancias.index[0]
