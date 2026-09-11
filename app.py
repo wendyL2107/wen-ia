@@ -52,13 +52,21 @@ try:
   from langchain_community.document_loaders import PyPDFLoader
   from langchain_community.vectorstores import Chroma
   from langchain_core.documents import Document
-  from langchain_core.embeddings import Embeddings
   from langchain_core.output_parsers import StrOutputParser
   from langchain_core.prompts import ChatPromptTemplate
 
   LANGCHAIN_DISPONIBLE = True
 except ImportError:
   LANGCHAIN_DISPONIBLE = False
+
+# Respaldo seguro para Embeddings si LangChain no está instalado en el entorno
+try:
+  from langchain_core.embeddings import Embeddings
+except Exception:
+
+  class Embeddings:
+    pass
+
 
 # ==============================================================================
 # CONFIGURACIÓN DE PÁGINA Y ESTILO DE Wen IA
@@ -294,9 +302,17 @@ class MotorRAG:
     if "Gemini" in proveedor:
       from langchain_google_genai import ChatGoogleGenerativeAI
 
-      llm = ChatGoogleGenerativeAI(
-          model="gemini-1.5-flash", temperature=0.1, google_api_key=api_key
-      )
+      try:
+        llm = ChatGoogleGenerativeAI(
+            model="gemini-1.5-flash", temperature=0.1, google_api_key=api_key
+        )
+      except Exception:
+        llm = ChatGoogleGenerativeAI(
+            model="gemini-1.5-flash-latest",
+            temperature=0.1,
+            google_api_key=api_key,
+        )
+
       embeddings = None
       try:
         from langchain_google_genai import GoogleGenerativeAIEmbeddings
@@ -316,14 +332,13 @@ class MotorRAG:
           cand.embed_query("test")
           embeddings = cand
         except Exception:
-          # Si la API de Google arroja 404 en su endpoint v1beta, activa el motor resiliente
           embeddings = LocalVectorEmbeddings()
 
     elif "Groq" in proveedor:
       from langchain_groq import ChatGroq
 
       llm = ChatGroq(
-          model_name="llama-3.1-8b-instant",
+          model_name="llama-3.3-70b-versatile",
           temperature=0.1,
           groq_api_key=api_key,
       )
@@ -452,8 +467,8 @@ st.sidebar.header("🔑 Configuración de Inteligencia Artificial")
 proveedor_sel = st.sidebar.selectbox(
     "Proveedor de IA / LLM:",
     [
+        "Groq / LLaMA 3.3 (Ultra rápido / Gratuito)",
         "Google Gemini (Gratuito / Free Tier)",
-        "Groq / LLaMA 3.1 (Ultra rápido / Gratuito)",
         "OpenAI (GPT-4o-mini)",
     ],
 )
