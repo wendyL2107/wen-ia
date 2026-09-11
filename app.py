@@ -299,39 +299,83 @@ class MotorRAG:
 
   @staticmethod
   def inicializar_proveedor(proveedor, api_key):
-    """Inicializa LLM y Embeddings con detección dinámica de modelos activos."""
+    """Inicializa LLM y Embeddings con validación activa de modelos autorizados."""
     if "Groq" in proveedor:
       from langchain_groq import ChatGroq
+      import groq
 
-      modelo_groq = "llama-3.1-8b-instant"
+      client_g = groq.Groq(api_key=api_key)
+
+      # 1. Filtrar únicamente modelos conversacionales evitando partners con términos obligatorios
+      modelos_candidatos = []
       try:
-        import groq
-
-        client_g = groq.Groq(api_key=api_key)
-        modelos_activos = [
-            m.id
-            for m in client_g.models.list().data
-            if not any(
-                f in m.id.lower()
-                for f in ["whisper", "guard", "embed", "safeguard"]
-            )
-        ]
-        prioridades_groq = [
-            "llama-3.3-70b-versatile",
-            "llama-3.1-8b-instant",
-            "llama3-70b-8192",
-            "llama3-8b-8192",
-            "mixtral-8x7b-32768",
-        ]
-        for p in prioridades_groq:
-          if p in modelos_activos:
-            modelo_groq = p
-            break
-        else:
-          if modelos_activos:
-            modelo_groq = modelos_activos[0]
+        for m in client_g.models.list().data:
+          mid = m.id
+          mid_low = mid.lower()
+          if any(
+              bad in mid_low
+              for bad in [
+                  "whisper",
+                  "guard",
+                  "embed",
+                  "safeguard",
+                  "orpheus",
+                  "canopy",
+                  "audio",
+                  "tts",
+                  "stt",
+                  "speech",
+                  "vision",
+                  "preview",
+              ]
+          ):
+            continue
+          if "/" in mid:  # Evita modelos de terceros con aprobación de términos pendiente
+            continue
+          modelos_candidatos.append(mid)
       except Exception:
-        modelo_groq = "llama-3.1-8b-instant"
+        pass
+
+      prioridades = [
+          "llama-3.3-70b-versatile",
+          "llama-3.1-8b-instant",
+          "llama3-70b-8192",
+          "llama3-8b-8192",
+          "allam-2-7b",
+          "gemma2-9b-it",
+          "mixtral-8x7b-32768",
+          "qwen-2.5-32b",
+          "deepseek-r1-distill-llama-70b",
+      ]
+
+      orden_prueba = [p for p in prioridades if p in modelos_candidatos]
+      for r in modelos_candidatos:
+        if r not in orden_prueba:
+          orden_prueba.append(r)
+      for p in prioridades:
+        if p not in orden_prueba:
+          orden_prueba.append(p)
+
+      # 2. Prueba pre-vuelo: valida cuál modelo responde sin errores de términos ni 404
+      modelo_groq = None
+      for cand in orden_prueba:
+        try:
+          client_g.chat.completions.create(
+              model=cand,
+              messages=[{"role": "user", "content": "1"}],
+              max_tokens=1,
+          )
+          modelo_groq = cand
+          break
+        except Exception:
+          continue
+
+      if not modelo_groq:
+        modelo_groq = (
+            "allam-2-7b"
+            if "allam-2-7b" in modelos_candidatos
+            else "llama-3.1-8b-instant"
+        )
 
       llm = ChatGroq(
           model_name=modelo_groq,
@@ -345,47 +389,54 @@ class MotorRAG:
       import google.generativeai as genai
 
       genai.configure(api_key=api_key)
-      modelo_gemini = "gemini-1.5-flash"
 
+      gemini_prioridades = [
+          "gemini-1.5-flash",
+          "gemini-1.5-flash-latest",
+          "gemini-2.0-flash",
+          "gemini-1.5-flash-002",
+          "gemini-1.5-pro",
+          "gemini-pro",
+      ]
       try:
-        disponibles = [
-            m.name.replace("models/", "")
-            for m in genai.list_models()
-            if "generateContent" in m.supported_generation_methods
-        ]
-        prioridades_gemini = [
-            "gemini-1.5-flash",
-            "gemini-1.5-flash-latest",
-            "gemini-2.0-flash",
-            "gemini-1.5-flash-002",
-            "gemini-1.5-pro",
-            "gemini-pro",
-        ]
-        for p in prioridades_gemini:
-          if p in disponibles:
-            modelo_gemini = p
-            break
-        else:
-          if disponibles:
-            modelo_gemini = disponibles[0]
+        for m in genai.list_models():
+          if "generateContent" in m.supported_generation_methods:
+            name = m.name.replace("models/", "")
+            if name not in gemini_prioridades:
+              gemini_prioridades.append(name)
       except Exception:
-        modelo_gemini = "gemini-1.5-flash"
+        pass
 
-      llm = ChatGoogleGenerativeAI(
-          model=modelo_gemini,
-          temperature=0.3,
-          google_api_key=api_key,
-      )
+      llm = None
+      for cand in gemini_prioridades:
+        try:
+          test_llm = ChatGoogleGenerativeAI(
+              model=cand,
+              temperature=0.3,
+              google_api_key=api_key,
+          )
+          test_llm.invoke("1")
+          llm = test_llm
+          break
+        except Exception:
+          continue
+
+      if llm is None:
+        llm = ChatGoogleGenerativeAI(
+            model="gemini-1.5-flash",
+            temperature=0.3,
+            google_api_key=api_key,
+        )
 
       embeddings = None
       try:
         from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
-        cand = GoogleGenerativeAIEmbeddings(
+        cand_emb = GoogleGenerativeAIEmbeddings(
             model="models/text-embedding-004", google_api_key=api_key
         )
-        cand.embed_query("test")
-        embeddings = cand
+        cand_emb.embed_query("test")
+        embeddings = cand_emb
       except Exception:
         embeddings = LocalVectorEmbeddings()
 
@@ -406,7 +457,7 @@ class MotorRAG:
         embedding=embeddings,
         collection_name=nombre_coleccion,
     )
-    # Recupera todos los bloques analíticos para que el LLM disponga del 100% de la información
+    # Recupera todos los bloques modulares para dar una visión analítica 360° al LLM
     return vectorstore.as_retriever(
         search_kwargs={"k": len(textos_analiticos)}
     )
@@ -421,8 +472,8 @@ class MotorRAG:
     prompt = ChatPromptTemplate.from_template("""
         Eres el asistente científico senior de Wen IA. 
         Tienes acceso a los resultados analíticos cuantitativos completos del experimento.
-        Responde a la pregunta del investigador basándote con rigurosidad técnica en el contexto analítico provisto.
-        Si te preguntan qué acceso tienes o sobre qué variables conoces, detalla todos los módulos y resultados disponibles en el contexto.
+        Responde a la pregunta del investigador basándote con rigurosidad técnica en el contexto provisto.
+        Si te preguntan a qué contexto tienes acceso o qué resultados conoces, resume todos los módulos disponibles en el contexto.
         
         CONTEXTO ANALÍTICO RECUPERADO:
         {context}
@@ -1004,7 +1055,7 @@ if archivo_cargado is not None:
               f" Indexación: **{tipo_emb}** en ChromaDB."
           )
 
-          # Extracción exhaustiva de todos los resultados multivariables
+          # Ingesta completa y estructurada de resultados experimentales
           anomalias_detectadas = [
               f"Muestra {etiquetas[i]} (Dist. Mahalanobis: {d_mahal[i]:.2f})"
               for i, p in enumerate(preds_iso)
@@ -1035,7 +1086,7 @@ if archivo_cargado is not None:
               for j in range(len(cols_num))
           ])
 
-          # Dossier científico exhaustivo por bloques modulares
+          # Dossier científico exhaustivo entregado a la base vectorial
           textos_analiticos = [
               (
                   "### [MÓDULO 0]: CONFIGURACIÓN Y METADATOS EXPERIMENTALES\n"
@@ -1084,10 +1135,8 @@ if archivo_cargado is not None:
                   "- Método de enlace: Ward (distancia euclidiana"
                   " estandarizada).\n"
                   "- Coeficiente de correlación cofenética:"
-                  f" {cophenet_val:.4f} (mide la fidelidad del dendrograma"
-                  " respecto a las distancias observadas).\n"
-                  f"- Partición analítica delimitada: {min(3, N)} clusters"
-                  " principales de muestras."
+                  f" {cophenet_val:.4f} (fidelidad métrica del dendrograma).\n"
+                  f"- Partición de corte: {min(3, N)} agrupaciones principales."
               ),
               (
                   "### [MÓDULO 5]: OPTIMIZACIÓN MULTICRITERIO TOPSIS\n"
