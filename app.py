@@ -120,7 +120,6 @@ class MotorBigData:
   def ejecutar_consulta_olap(df, consulta_sql):
     """Ejecuta consultas vectorizadas en DuckDB sobre el dataset como tabla virtual."""
     conn = duckdb.connect(database=":memory:")
-    # Registra el DataFrame directamente en el motor DuckDB sin serialización
     conn.register("matriz_experimental", df)
     res_df = conn.execute(consulta_sql).df()
     conn.close()
@@ -257,9 +256,6 @@ class MotorAnalitico:
 
 
 # ==============================================================================
-# MOTOR RAG & SERVICIOS LLM
-# ==============================================================================
-# ==============================================================================
 # MOTOR RAG & SERVICIOS LLM MULTI-PROVEEDOR
 # ==============================================================================
 class MotorRAG:
@@ -274,7 +270,7 @@ class MotorRAG:
           model="gemini-1.5-flash", temperature=0.1, google_api_key=api_key
       )
       embeddings = GoogleGenerativeAIEmbeddings(
-          model="text-embedding-004", google_api_key=api_key
+          model="models/embedding-001", google_api_key=api_key
       )
     elif "Groq" in proveedor:
       from langchain_community.embeddings.fastembed import FastEmbedEmbeddings
@@ -509,7 +505,6 @@ if archivo_cargado is not None:
           f" tiende a **{efecto}** `{target}`."
       )
 
-      # Inclusión de pestañas: Correlación, Influencia y NUEVO Motor Big Data SQL
       tab1, tab2, tab_sql = st.tabs([
           "Correlación (Pearson)",
           f"Influencia ({metodo})",
