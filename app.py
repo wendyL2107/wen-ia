@@ -259,10 +259,14 @@ class MotorAnalitico:
 # ==============================================================================
 # MOTOR RAG & SERVICIOS LLM
 # ==============================================================================
+# ==============================================================================
+# MOTOR RAG & SERVICIOS LLM MULTI-PROVEEDOR
+# ==============================================================================
 class MotorRAG:
 
   @staticmethod
   def inicializar_proveedor(proveedor, api_key):
+    """Inicializa dinámicamente el LLM y los Embeddings según la selección."""
     if "Gemini" in proveedor:
       from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 
@@ -270,7 +274,7 @@ class MotorRAG:
           model="gemini-1.5-flash", temperature=0.1, google_api_key=api_key
       )
       embeddings = GoogleGenerativeAIEmbeddings(
-          model="models/text-embedding-004", google_api_key=api_key
+          model="text-embedding-004", google_api_key=api_key
       )
     elif "Groq" in proveedor:
       from langchain_community.embeddings.fastembed import FastEmbedEmbeddings
@@ -291,6 +295,7 @@ class MotorRAG:
 
   @staticmethod
   def indexar_contexto_analitico(textos_analiticos, embeddings):
+    """Crea una base de datos vectorial Chroma en memoria."""
     vectorstore = Chroma.from_texts(
         texts=textos_analiticos,
         embedding=embeddings,
@@ -300,21 +305,23 @@ class MotorRAG:
 
   @staticmethod
   def consultar_asistente_rag(retriever, llm, pregunta_usuario):
+    """Ejecuta una cadena de recuperación fundamentada sin alucinaciones."""
     docs_rel = retriever.invoke(pregunta_usuario)
     contexto = "\n\n".join(
         [f"[Fragmento {i+1}]: {d.page_content}" for i, d in enumerate(docs_rel)]
     )
     prompt = ChatPromptTemplate.from_template("""
         Eres el asistente científico senior de Wen IA. 
-        Responde basándote ESTRICTAMENTE en el siguiente contexto. No inventes información.
+        Responde basándote ESTRICTAMENTE en el siguiente contexto analítico y experimental.
+        Si la información no está sustentada en el contexto, indícalo con honestidad. No inventes datos.
         
-        CONTEXTO:
+        CONTEXTO RECUPERADO:
         {context}
         
-        PREGUNTA:
+        PREGUNTA DEL INVESTIGADOR:
         {question}
         
-        RESPUESTA ESTRUCTURADA:
+        RESPUESTA TÉCNICA ESTRUCTURADA:
         """)
     chain = prompt | llm | StrOutputParser()
     return chain.invoke(
@@ -323,6 +330,7 @@ class MotorRAG:
 
   @staticmethod
   def procesar_documento_pdf(uploaded_file, embeddings):
+    """Carga, particiona semánticamente e indexa documentos PDF en ChromaDB."""
     import tempfile
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
@@ -350,10 +358,13 @@ class MotorRAG:
         for d in docs_rel
     ])
     prompt = ChatPromptTemplate.from_template("""
-        Responde fundamentándote ÚNICAMENTE en los fragmentos del documento adjuntos, citando la página:
+        Eres un asistente de documentación técnica e investigación.
+        Responde la pregunta basándote ÚNICAMENTE en los fragmentos recuperados, citando la página:
         {context}
         
         PREGUNTA: {question}
+        
+        RESPUESTA DOCUMENTADA:
         """)
     chain = prompt | llm | StrOutputParser()
     return chain.invoke({"context": contexto, "question": pregunta}), docs_rel
@@ -361,14 +372,15 @@ class MotorRAG:
   @staticmethod
   def generar_informe_ejecutivo(resumen_metricas, llm):
     prompt = ChatPromptTemplate.from_template("""
-        Redacta un informe técnico formal en Markdown a partir de estas métricas:
+        Eres un Director Científico y Consultor de IA Senior.
+        A partir del siguiente resumen analítico cuantitativo, redacta un INFORME TÉCNICO EJECUTIVO formal:
         {metricas}
         
-        Estructura:
-        1. Resumen Ejecutivo
-        2. Hallazgos Analíticos y Factores Críticos
-        3. Evaluación de Anomalías e Inferencia
-        4. Conclusiones y Recomendaciones Basadas en Evidencia
+        Estructura formal en Markdown:
+        1. Resumen Ejecutivo y Objetivos
+        2. Hallazgos Analíticos Clave
+        3. Interpretación de Dinámica Multivariable y Riesgos/Anomalías
+        4. Recomendaciones Estratégicas Basadas en Evidencia Cuantitativa
         """)
     chain = prompt | llm | StrOutputParser()
     return chain.invoke({"metricas": resumen_metricas})
