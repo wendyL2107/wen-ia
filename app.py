@@ -70,6 +70,99 @@ except Exception:
 
 
 # ==============================================================================
+# UTILIDADES ANTI-DEGENERACIÓN Y MODEL DISCOVERY
+# ==============================================================================
+def desduplicar_texto(texto):
+  """Elimina bucles de repetición y frases idénticas o casi idénticas."""
+  if not texto:
+    return ""
+  if "[FIN]" in texto:
+    texto = texto.split("[FIN]")[0]
+
+  lineas = texto.split("\n")
+  lineas_filtradas = []
+  conjuntos_vistos = []
+
+  for l in lineas:
+    l_strip = l.strip()
+    l_core = l_strip.lstrip("-*• 0123456789.)").strip()
+    if len(l_core) > 25:
+      palabras = set(l_core.lower().split())
+      repetida = False
+      for c in conjuntos_vistos:
+        if len(palabras) > 0 and len(palabras & c) / len(palabras) > 0.75:
+          repetida = True
+          break
+      if repetida:
+        continue
+      conjuntos_vistos.append(palabras)
+    lineas_filtradas.append(l)
+
+  return "\n".join(lineas_filtradas).strip()
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def obtener_modelos_groq_disponibles(api_key):
+  """Consulta en tiempo real qué modelos de texto están vigentes en tu API key."""
+  if not api_key:
+    return ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "allam-2-7b"]
+  try:
+    import groq
+
+    client = groq.Groq(api_key=api_key.strip())
+    lista = client.models.list().data
+    descartados = [
+        "whisper",
+        "guard",
+        "embed",
+        "safeguard",
+        "orpheus",
+        "canopy",
+        "audio",
+        "tts",
+        "stt",
+        "speech",
+        "vision",
+        "preview",
+        "gemma",  # Retirado / Decommissioned
+        "mixtral",  # Retirado / Decommissioned
+    ]
+    modelos_validos = []
+    for m in lista:
+      mid = m.id
+      mid_low = mid.lower()
+      es_activo = getattr(m, "active", True)
+      if not es_activo:
+        continue
+      if any(d in mid_low for d in descartados):
+        continue
+      if "/" in mid:
+        continue
+      modelos_validos.append(mid)
+
+    preferidos = [
+        "llama-3.3-70b-versatile",
+        "llama-3.1-8b-instant",
+        "llama3-70b-8192",
+        "llama3-8b-8192",
+        "deepseek-r1-distill-llama-70b",
+        "qwen-2.5-32b",
+        "allam-2-7b",
+    ]
+    ordenados = [p for p in preferidos if p in modelos_validos]
+    for m in modelos_validos:
+      if m not in ordenados:
+        ordenados.append(m)
+    return (
+        ordenados
+        if ordenados
+        else ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "allam-2-7b"]
+    )
+  except Exception:
+    return ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "allam-2-7b"]
+
+
+# ==============================================================================
 # CONFIGURACIÓN DE PÁGINA Y ESTILO DE Wen IA
 # ==============================================================================
 st.set_page_config(
@@ -298,135 +391,32 @@ class LocalVectorEmbeddings(Embeddings):
 class MotorRAG:
 
   @staticmethod
-  def inicializar_proveedor(proveedor, api_key):
-    """Inicializa LLM y Embeddings con validación estricta de modelos de alta calidad."""
+  def inicializar_proveedor(proveedor, api_key, modelo_especifico=None):
+    """Inicializa LLM y Embeddings con parámetros anti-repetición."""
     if "Groq" in proveedor:
       from langchain_groq import ChatGroq
-      import groq
 
-      client_g = groq.Groq(api_key=api_key)
-
-      modelos_candidatos = []
-      try:
-        for m in client_g.models.list().data:
-          mid = m.id
-          mid_low = mid.lower()
-          # Excluir modelos de audio, visiones, guardas y modelos regionales que entran en bucle
-          if any(
-              bad in mid_low
-              for bad in [
-                  "whisper",
-                  "guard",
-                  "embed",
-                  "safeguard",
-                  "orpheus",
-                  "canopy",
-                  "audio",
-                  "tts",
-                  "stt",
-                  "speech",
-                  "vision",
-                  "preview",
-                  "allam",  # Excluido para evitar bucles de repetición en español
-              ]
-          ):
-            continue
-          if "/" in mid:
-            continue
-          modelos_candidatos.append(mid)
-      except Exception:
-        pass
-
-      # Prioridades probadas con excelente capacidad de razonamiento en español
-      prioridades = [
-          "llama-3.3-70b-versatile",
-          "llama-3.1-8b-instant",
-          "gemma2-9b-it",
-          "llama3-70b-8192",
-          "llama3-8b-8192",
-          "mixtral-8x7b-32768",
-          "qwen-2.5-32b",
-      ]
-
-      orden_prueba = [p for p in prioridades if p in modelos_candidatos]
-      for r in modelos_candidatos:
-        if r not in orden_prueba:
-          orden_prueba.append(r)
-      for p in prioridades:
-        if p not in orden_prueba:
-          orden_prueba.append(p)
-
-      modelo_groq = None
-      for cand in orden_prueba:
-        try:
-          client_g.chat.completions.create(
-              model=cand,
-              messages=[{"role": "user", "content": "1"}],
-              max_tokens=1,
-          )
-          modelo_groq = cand
-          break
-        except Exception:
-          continue
-
-      if not modelo_groq:
-        modelo_groq = "gemma2-9b-it"
-
-      # Inclusión de frequency_penalty y presence_penalty para evitar bucles
+      mod = modelo_especifico or "llama-3.3-70b-versatile"
       llm = ChatGroq(
-          model_name=modelo_groq,
+          model_name=mod,
           temperature=0.3,
           groq_api_key=api_key,
           model_kwargs={
-              "frequency_penalty": 0.6,
-              "presence_penalty": 0.4,
+              "frequency_penalty": 0.8,
+              "presence_penalty": 0.5,
           },
       )
       embeddings = LocalVectorEmbeddings()
 
     elif "Gemini" in proveedor:
       from langchain_google_genai import ChatGoogleGenerativeAI
-      import google.generativeai as genai
 
-      genai.configure(api_key=api_key)
-
-      gemini_prioridades = [
-          "gemini-1.5-flash",
-          "gemini-1.5-flash-latest",
-          "gemini-2.0-flash",
-          "gemini-1.5-flash-002",
-          "gemini-1.5-pro",
-          "gemini-pro",
-      ]
-      try:
-        for m in genai.list_models():
-          if "generateContent" in m.supported_generation_methods:
-            name = m.name.replace("models/", "")
-            if name not in gemini_prioridades:
-              gemini_prioridades.append(name)
-      except Exception:
-        pass
-
-      llm = None
-      for cand in gemini_prioridades:
-        try:
-          test_llm = ChatGoogleGenerativeAI(
-              model=cand,
-              temperature=0.2,
-              google_api_key=api_key,
-          )
-          test_llm.invoke("1")
-          llm = test_llm
-          break
-        except Exception:
-          continue
-
-      if llm is None:
-        llm = ChatGoogleGenerativeAI(
-            model="gemini-1.5-flash",
-            temperature=0.2,
-            google_api_key=api_key,
-        )
+      mod = modelo_especifico or "gemini-1.5-flash"
+      llm = ChatGoogleGenerativeAI(
+          model=mod,
+          temperature=0.2,
+          google_api_key=api_key,
+      )
 
       embeddings = None
       try:
@@ -448,7 +438,7 @@ class MotorRAG:
           temperature=0.2,
           api_key=api_key,
           model_kwargs={
-              "frequency_penalty": 0.5,
+              "frequency_penalty": 0.7,
               "presence_penalty": 0.4,
           },
       )
@@ -480,10 +470,11 @@ class MotorRAG:
         Eres el asistente científico senior de Wen IA. 
         Tienes acceso a los resultados analíticos cuantitativos completos del experimento.
         
-        REGLAS DE RESPUESTA:
-        - Responde a la pregunta del investigador basándote con rigurosidad técnica en el contexto provisto.
-        - PROHIBICIÓN ESTRICTA: No repitas la misma oración, dato, conclusión ni párrafo. Cada idea debe expresarse UNA SOLA VEZ.
-        - Sé conciso, claro y directo. Una vez que hayas respondido la pregunta, finaliza la respuesta inmediatamente sin agregar texto redundante.
+        INSTRUCCIONES DE RESPUESTA:
+        1. Responde a la pregunta del investigador basándote con rigurosidad técnica en el contexto provisto.
+        2. PROHIBICIÓN ABSOLUTA DE REPETICIÓN: Expresa cada hallazgo, métrica o conclusión UNA SOLA VEZ. NUNCA repitas la misma oración o párrafo.
+        3. Sé conciso y analítico. Responde en un máximo de 3 a 5 párrafos estructurados.
+        4. Al terminar de contestar los puntos solicitados, escribe la etiqueta [FIN] y concluye de inmediato.
         
         CONTEXTO ANALÍTICO RECUPERADO:
         {context}
@@ -494,9 +485,9 @@ class MotorRAG:
         RESPUESTA TÉCNICA ESTRUCTURADA:
         """)
     chain = prompt | llm | StrOutputParser()
-    return chain.invoke(
-        {"context": contexto, "question": pregunta_usuario}
-    ), docs_rel
+    raw_res = chain.invoke({"context": contexto, "question": pregunta_usuario})
+    clean_res = desduplicar_texto(raw_res)
+    return clean_res, docs_rel
 
   @staticmethod
   def procesar_documento_pdf(uploaded_file, embeddings):
@@ -531,7 +522,7 @@ class MotorRAG:
     prompt = ChatPromptTemplate.from_template("""
         Eres un asistente de documentación técnica e investigación.
         Responde la pregunta basándote ÚNICAMENTE en los fragmentos recuperados, citando la página.
-        No repitas información y concluye una vez contestada la pregunta:
+        No repitas texto y finaliza inmediatamente tras contestar:
         {context}
         
         PREGUNTA: {question}
@@ -539,7 +530,8 @@ class MotorRAG:
         RESPUESTA DOCUMENTADA:
         """)
     chain = prompt | llm | StrOutputParser()
-    return chain.invoke({"context": contexto, "question": pregunta}), docs_rel
+    raw_doc = chain.invoke({"context": contexto, "question": pregunta})
+    return desduplicar_texto(raw_doc), docs_rel
 
   @staticmethod
   def generar_informe_ejecutivo(resumen_metricas, llm):
@@ -551,7 +543,7 @@ class MotorRAG:
         REGLAS CRÍTICAS DE REDACCIÓN:
         - Redacta cada sección UNA SOLA VEZ de manera analítica, clara y directa.
         - PROHIBIDO repetir títulos, párrafos, listas o conclusiones.
-        - Una vez completada la sección 4, finaliza inmediatamente la respuesta.
+        - Una vez completada la sección 4, escribe [FIN] y finaliza la respuesta.
         
         DATOS DE ENTRADA:
         {metricas}
@@ -563,7 +555,8 @@ class MotorRAG:
         ## 4. Recomendaciones Estratégicas Basadas en Evidencia
         """)
     chain = prompt | llm | StrOutputParser()
-    return chain.invoke({"metricas": resumen_metricas})
+    raw_rep = chain.invoke({"metricas": resumen_metricas})
+    return desduplicar_texto(raw_rep)
 
 
 # ==============================================================================
@@ -614,6 +607,22 @@ api_key_input = st.sidebar.text_input(
 )
 if not api_key_input:
   api_key_input = os.environ.get(env_var, "")
+
+# Selector interactivo de modelos activos por proveedor
+modelo_seleccionado = None
+if "Groq" in proveedor_sel and api_key_input:
+  modelos_groq_activos = obtener_modelos_groq_disponibles(api_key_input)
+  modelo_seleccionado = st.sidebar.selectbox(
+      "Modelo Groq activo:",
+      modelos_groq_activos,
+      help="Modelos de texto activos y verificados en tu cuenta de Groq.",
+  )
+elif "Gemini" in proveedor_sel and api_key_input:
+  modelo_seleccionado = st.sidebar.selectbox(
+      "Modelo Gemini activo:",
+      ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-1.5-pro"],
+      help="Versión del modelo generativo de Google.",
+  )
 
 st.sidebar.header("📁 Datos de Entrada")
 archivo_cargado = st.sidebar.file_uploader(
@@ -1041,7 +1050,7 @@ if archivo_cargado is not None:
     else:
       try:
         llm_inst, embeddings_inst = MotorRAG.inicializar_proveedor(
-            proveedor_sel, api_key_input
+            proveedor_sel, api_key_input, modelo_especifico=modelo_seleccionado
         )
         tab_rag1, tab_rag2, tab_rag3 = st.tabs([
             "💬 Módulo 1: Asistente RAG Analítico",
@@ -1066,9 +1075,9 @@ if archivo_cargado is not None:
               f" Indexación: **{tipo_emb}** en ChromaDB."
           )
 
-          # Extracción estructurada y exhaustiva de todos los resultados analíticos
+          # Ingesta completa y estructurada de resultados experimentales
           anomalias_detectadas = [
-              f"Muestra {etiquetas[i]} (Mahalanobis: {d_mahal[i]:.2f})"
+              f"Muestra {etiquetas[i]} (Dist. Mahalanobis: {d_mahal[i]:.2f})"
               for i, p in enumerate(preds_iso)
               if p == -1
           ]
@@ -1097,7 +1106,7 @@ if archivo_cargado is not None:
               for j in range(len(cols_num))
           ])
 
-          # Dossier científico exhaustivo por bloques modulares
+          # Dossier científico exhaustivo entregado a la base vectorial
           textos_analiticos = [
               (
                   "### [MÓDULO 0]: CONFIGURACIÓN Y METADATOS EXPERIMENTALES\n"
